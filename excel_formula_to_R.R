@@ -34,37 +34,58 @@ convert_formula <- function(form) {
   f <- sub("^=", "", form)
   f <- gsub("\\$", "", f)
   
-  f <- gsub(
-    'IFERROR\\(([^()]+(?:\\([^()]*\\))?[^()]*)\\s*,\\s*([^()]*)\\)',
-    'tryCatch({\\1}, error = function(e) {\\2})',
-    f, perl = TRUE
-  )
-  
-  func_map <- c(
-    SUM = "sum", AVERAGE = "mean", IF = "ifelse",
-    MIN = "min", MAX = "max", COUNT = "length",
-    COUNTA = "length", ROUND = "round", CONCATENATE = "paste0"
-  )
-  for (xl in names(func_map)) {
-    f <- gsub(paste0("\\b", xl, "\\b"), func_map[xl], f, ignore.case = TRUE)
+  repeat {
+    f_old <- f  # Sauvegarde avant transformation
+    
+    # IFERROR -> tryCatch
+    f <- gsub(
+      'IFERROR\\(([^()]+(?:\\([^()]*\\))?[^()]*)\\s*,\\s*([^()]*)\\)',
+      'tryCatch({\\1}, error = function(e) {\\2})',
+      f, perl = TRUE
+    )
+    
+    # Fonctions Excel -> équivalents R
+    func_map <- c(
+      SUM = "sum", AVERAGE = "mean", IF = "ifelse",
+      MIN = "min", MAX = "max", COUNT = "length",
+      COUNTA = "length", ROUND = "round", CONCATENATE = "paste0"
+    )
+    for (xl in names(func_map)) {
+      f <- gsub(paste0("\\b", xl, "\\b"), func_map[xl], f, ignore.case = TRUE)
+    }
+    
+    # SUMIF -> sum(ifelse(...))
+    f <- gsub(
+      "SUMIF\\(\\$?([A-Z]+\\$?[0-9]+:[A-Z]+\\$?[0-9]+),\\s*\"?&?\"?([^,]+),\\s*\\$?([A-Z]+\\$?[0-9]+:[A-Z]+\\$?[0-9]+)\\)",
+      "sum(ifelse(\\1 == \\2, \\3, 0))",
+      f,
+      perl = TRUE
+    )
+    
+    # VLOOKUP exact
+    f <- gsub(
+      "VLOOKUP\\(([^,]+),\\s*'([^']+)'!\\$?([A-Z]+)\\$?([0-9]+):\\$?([A-Z]+)\\$?([0-9]+),\\s*([0-9]+),\\s*FALSE\\)",
+      "vlookup_r(\\1, sheets[['\\2']][\\4:\\6, col2num('\\3'):col2num('\\5')], \\7)",
+      f,
+      perl = TRUE
+    )
+    
+    # Gestion du &
+    f <- handle_ampersand(f)
+    
+    # TEXT -> as.character
+    f <- gsub(
+      'TEXT\\(([^,]+?),\\s*"[^"]*"\\)',
+      'as.character(\\1)',
+      f,
+      perl = TRUE
+    )
+    
+    # Si rien n'a changé, on sort
+    if (identical(f, f_old)) break
   }
   
-  f <- gsub(
-    "SUMIF\\(\\$?([A-Z]+\\$?[0-9]+:[A-Z]+\\$?[0-9]+),[[:space:]]*\"?&?\"?([^,]+),[[:space:]]*\\$?([A-Z]+\\$?[0-9]+:[A-Z]+\\$?[0-9]+)\\)",
-    "sum(ifelse(\\1 == \\2, \\3, 0))",
-    f,
-    perl = TRUE
-  )
-  
-  f <- handle_ampersand(f)
-  
-  f <- gsub(
-    "VLOOKUP\\(([^,]+),\\s*'([^']+)'!\\$?([A-Z]+)\\$?([0-9]+):\\$?([A-Z]+)\\$?([0-9]+),\\s*([0-9]+),\\s*FALSE\\)",
-    "vlookup_r(\\1, sheets[['\\2']][\\4:\\6, col2num('\\3'):col2num('\\5')], \\7)",
-    f,
-    perl = TRUE
-  )
-  
+  # Remplacer toutes les références (A1, A1:B2)
   refs <- unique(unlist(
     regmatches(f, gregexpr("([A-Z]+[0-9]+)(?::[A-Z]+[0-9]+)?", f, perl = TRUE))
   ))
@@ -72,14 +93,9 @@ convert_formula <- function(form) {
     f <- gsub(r, convert_ref(r), f, fixed = TRUE)
   }
   
+  # Remplacer = par ==
   f <- gsub("(?<!=)=(?!=)", "==", f, perl = TRUE)
-  
-  f <- gsub(
-    'TEXT\\(([^,]+?),\\s*"[^"]*"\\)',
-    'as.character(\\1)',
-    f,
-    perl = TRUE
-  )
   
   f
 }
+
