@@ -37,19 +37,35 @@ topo_order <- function(ids, deps_list) {
 }
 
 evaluate_cells <- function(sheets, form_cells) {
+  # construire les identifiants
   ids <- paste0(form_cells$sheet, "!", form_cells$address)
+  # topologiquement ordonner
   order_ids <- topo_order(ids, form_cells$deps)
+  # mapping id -> informations de position
   pos <- setNames(
     Map(function(sh, addr, row, col) {
       list(sheet = sh, row = row, col = col)
     }, form_cells$sheet, form_cells$address, form_cells$row, form_cells$col),
     ids
   )
+  
   for (id in order_ids) {
     info <- pos[[id]]
     code <- form_cells$R_code[ids == id]
-    val <- eval(parse(text = code))
+    
+    # --- nouveau bloc : on crée un env avec 'values' = la feuille en cours ---
+    ctx <- new.env(parent = globalenv())
+    ctx$sheets    <- sheets             # pour vlookup_r, etc.
+    ctx$vlookup_r <- vlookup_r          # votre helper
+    ctx$col2num   <- col2num            # votre helper
+    ctx$values    <- sheets[[info$sheet]]  # *la* feuille courante
+    
+    # évaluation dans ce contexte
+    val <- eval(parse(text = code), envir = ctx)
+    
+    # on écrit dans le data.frame de la feuille
     sheets[[info$sheet]][info$row, info$col] <- val
   }
+  
   sheets
 }
