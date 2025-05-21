@@ -69,3 +69,35 @@ evaluate_cells <- function(sheets, form_cells) {
   
   sheets
 }
+
+get_excel_globals <- function(path) {
+  wb <- loadWorkbook(path)
+  noms <- getNamedRegions(wb)
+  positions <- attr(noms, "position")
+  print(noms)
+  print(positions)
+  
+  # On garde les plages qui pointent vers UNE SEULE cellule (ex : "D77", "B5", etc.)
+  est_cellule_unique <- grepl("^\\$?[A-Z]+\\$?[0-9]+$", positions)
+  # Association nom → cellule
+  assoc_cellules <- data.frame(
+    nom = noms[est_cellule_unique],
+    cellule = positions[est_cellule_unique],
+    sheet = attr(noms, "sheet")[est_cellule_unique],
+    stringsAsFactors = FALSE
+  )
+  return(assoc_cellules)  # Résultat : liste des noms associés à une cellule unique
+}
+
+build_named_cell_map <- function(df) {
+  refs <- lapply(seq_len(nrow(df)), function(i) {
+    list(
+      ref   = convert_ref(df$cellule[i]),
+      sheet = df$sheet[i]
+    )
+  })
+  names(refs) <- df$nom
+  refs
+}
+
+  

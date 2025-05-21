@@ -7,7 +7,8 @@ library(dplyr)
 source("~/work/excel_formula_to_R.R")
 source("~/work/utils.R")
 
-# Fonction principale --------------------------------------------------------
+
+
 # Fonction principale --------------------------------------------------------
 parse_excel_formulas <- function(path, emit_script = FALSE) {
   message("[parse_excel_formulas] Chargement du fichier Excel...")
@@ -18,12 +19,20 @@ parse_excel_formulas <- function(path, emit_script = FALSE) {
       read.xlsx(path, sheet = sh, colNames = FALSE)
     }), wb_sheets
   )
+  message("[parse_excel_formulas] Extraction des variables globales")
+  globals <- get_excel_globals(path)
+  nom_cellules <- build_named_cell_map(globals)
+  print(nom_cellules)
+
   
+
   message("[parse_excel_formulas] Extraction des cellules contenant des formules...")
   cells_all <- xlsx_cells(path)
   
   form_cells <- cells_all %>% filter(!is.na(formula))
   message(sprintf("[parse_excel_formulas] %d formules extraites.", nrow(form_cells)))
+  message("[parse_excel_formulas] Vérification des variables globales utilisées dans les formules...")
+  check_globals_usage(formules = form_cells$formula, noms_cellules = nom_cellules)
   
   message("[parse_excel_formulas] Extraction des dépendances...")
   form_cells <- form_cells %>%
@@ -41,7 +50,7 @@ parse_excel_formulas <- function(path, emit_script = FALSE) {
   message("[parse_excel_formulas] Conversion des formules Excel en code R...")
   form_cells <- form_cells %>%
     mutate(
-      R_code = vapply(formula, convert_formula, ""),
+      R_code = vapply(formula, function(f) convert_formula(f, nom_cellules), character(1)),
       row    = as.integer(sub("^[A-Z]+", "", address)),
       col    = vapply(gsub("[0-9]+", "", address), function(x) as.integer(col2num(x)), integer(1))
     ) %>%
