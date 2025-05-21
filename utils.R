@@ -1,9 +1,4 @@
 # Utilitaires ----------------------------------------------------------------
-col2num <- function(col_str) {
-  letters <- strsplit(col_str, "")[[1]]
-  sum((match(letters, LETTERS)) * 26^((length(letters) - 1):0))
-}
-
 vlookup_r <- function(lookup, df, col_index) {
   idx <- match(lookup, df[[1]])
   ifelse(is.na(idx), NA, df[[col_index]][idx])

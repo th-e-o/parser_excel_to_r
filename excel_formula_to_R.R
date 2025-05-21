@@ -7,51 +7,108 @@
 
 # Découpe f en deux parties au premier opérateur de ops au niveau racine,
 # en gérant d'abord les opérateurs à deux caractères puis à un seul.
+# ────────────────────────────────────────────────────────────────────────────────
+# split_at_top : split au premier opérateur (hors parenthèses et hors quotes)
 split_at_top <- function(f, ops) {
   chars <- strsplit(f, "", fixed = TRUE)[[1]]
-  depth <- 0L
-  i <- 1L
+  depth     <- 0L
+  in_quote  <- FALSE
+  quote_chr <- ""
+  i         <- 1L
+  
   while (i <= length(chars)) {
     ch <- chars[i]
-    if (ch == "(") {
-      depth <- depth + 1L
-    } else if (ch == ")") {
-      depth <- depth - 1L
-    } else if (depth == 0L) {
-      # tenter les opérateurs à 2 caractères
+    
+    # → gestion des quotes : on ignore tout jusqu'à la quote fermante
+    if (!in_quote && (ch == "'" || ch == '"')) {
+      in_quote  <- TRUE
+      quote_chr <- ch
+      i <- i + 1L
+      next
+    }
+    if (in_quote && ch == quote_chr) {
+      in_quote  <- FALSE
+      quote_chr <- ""
+      i <- i + 1L
+      next
+    }
+    if (in_quote) {
+      i <- i + 1L
+      next
+    }
+    
+    # hors quotes, on gère la profondeur des parenthèses
+    if (ch == "(")      depth <- depth + 1L
+    else if (ch == ")") depth <- depth - 1L
+    else if (depth == 0L) {
+      # test des ops à 2 caractères
       two <- if (i < length(chars)) paste0(chars[i], chars[i+1]) else ""
       if (two %in% ops) {
         left  <- trimws(substr(f, 1, i-1))
         right <- trimws(substr(f, i+2, nchar(f)))
         return(list(left = left, op = two, right = right))
       }
-      # puis opérateurs à 1 caractère
+      # test des ops à 1 caractère
       if (ch %in% ops) {
         left  <- trimws(substr(f, 1, i-1))
         right <- trimws(substr(f, i+1, nchar(f)))
         return(list(left = left, op = ch, right = right))
       }
     }
+    
     i <- i + 1L
   }
   NULL
 }
 
+
+
 # Scinde une chaîne s sur les virgules de profondeur 0
+# ────────────────────────────────────────────────────────────────────────────────
+# split_top : découpe sur les virgules de profondeur 0 (hors parenthèses & hors quotes)
 split_top <- function(s) {
   if (length(s) != 1 || is.na(s) || !nzchar(s)) return(character())
-  chars <- strsplit(s, "")[[1]]
-  depth <- 0L; args <- character(); curr <- ""
+  chars <- strsplit(s, "", fixed = TRUE)[[1]]
+  depth    <- 0L
+  in_quote <- FALSE
+  quote_chr<- ""
+  args     <- character()
+  curr     <- ""
+  
   for (ch in chars) {
+    # gestion des quotes
+    if (!in_quote && (ch == "'" || ch == '"')) {
+      in_quote  <- TRUE
+      quote_chr <- ch
+      curr      <- paste0(curr, ch)
+      next
+    }
+    if (in_quote && ch == quote_chr) {
+      in_quote  <- FALSE
+      quote_chr <- ""
+      curr      <- paste0(curr, ch)
+      next
+    }
+    if (in_quote) {
+      curr <- paste0(curr, ch)
+      next
+    }
+    
+    # hors quotes, gestion des parenthèses
     if (ch == "(")      depth <- depth + 1L
     else if (ch == ")") depth <- depth - 1L
     else if (ch == "," && depth == 0L) {
-      args <- c(args, curr); curr <- ""; next
+      args <- c(args, curr)
+      curr <- ""
+      next
     }
+    
     curr <- paste0(curr, ch)
   }
+  
   c(args, curr)
 }
+
 
 # Nettoie les parenthèses externes appariées
 clean_parentheses <- function(f) {
@@ -82,35 +139,57 @@ col2num <- function(col) {
 
 # Convertit une référence Excel en indices R
 convert_ref <- function(ref) {
-  # Extraire le nom de feuille si présent
-  if (grepl("!", ref)) {
-    parts <- strsplit(ref, "!", fixed = TRUE)[[1]]
-    sheet <- parts[1]
-    ref <- parts[2]
+  # on capture soit 'nom de feuille' (avec '' pour les apostrophes),
+  # soit un nom sans apostrophes (lettres, chiffres, espace, - ou _),
+  # suivi de ! et d'une coordonnée (A1 ou A1:B2)
+  m <- regexec(
+    "^(?:'((?:[^']|'')+)'|([A-Za-z0-9 _-]+))!([A-Za-z]+[0-9]+(?::[A-Za-z]+[0-9]+)?)$",
+    ref, perl = TRUE
+  )
+  parts <- regmatches(ref, m)[[1]]
+  
+  if (length(parts) > 0) {
+    # parts[2] = texte entre '…' (avec '' pour chaque '), 
+    # parts[3] = texte non-apostrophé
+    sheet_raw <- if (nzchar(parts[2])) parts[2] else parts[3]
+    # on remplace les doubles apostrophes par une seule
+    sheet <- gsub("''", "'", sheet_raw)
+    coord <- parts[4]
   } else {
+    # pas de "!", c'est juste une coordonnée
     sheet <- NULL
+    coord <- ref
   }
   
-  # Conversion des coordonnées
-  if (grepl(":", ref, fixed = TRUE)) {
-    prts <- strsplit(ref, ":", fixed = TRUE)[[1]]
-    s <- strcapture("^([A-Z]+)([0-9]+)$", prts[1], proto = list(C = "", R = 0))
-    e <- strcapture("^([A-Z]+)([0-9]+)$", prts[2], proto = list(C = "", R = 0))
-    ref_str <- sprintf("%d:%d, %d",
-                       as.integer(s$R), as.integer(e$R),
-                       col2num(s$C))
+  # maintenant on transforme coord (ex. "A1" ou "A1:B2") en indices R
+  if (grepl(":", coord, fixed = TRUE)) {
+    bounds <- strsplit(coord, ":", fixed = TRUE)[[1]]
+    start  <- strcapture("^([A-Z]+)([0-9]+)$", bounds[1],
+                         proto = list(C="", R = 0))
+    end    <- strcapture("^([A-Z]+)([0-9]+)$", bounds[2],
+                         proto = list(C="", R = 0))
+    rows <- sprintf("%d:%d", as.integer(start$R), as.integer(end$R))
+    cols <- sprintf("%d:%d",
+                    col2num(start$C),
+                    col2num(end$C))
   } else {
-    xy <- strcapture("^([A-Z]+)([0-9]+)$", ref, proto = list(C = "", R = 0))
-    ref_str <- sprintf("%d, %d", 
-                       as.integer(xy$R), col2num(xy$C))
+    xy   <- strcapture("^([A-Z]+)([0-9]+)$", coord,
+                       proto = list(C="", R = 0))
+    rows <- sprintf("%d",   as.integer(xy$R))
+    cols <- sprintf("%d",   col2num(xy$C))
   }
-  ref_str <- gsub(",[0-9]+:[0-9]+", "", ref_str)
+  
+  idx <- sprintf("%s, %s", rows, cols)
   if (!is.null(sheet)) {
-    sprintf("sheets[['%s']][%s]", sheet, ref_str)
+    sprintf("sheets[[\"%s\"]][%s]", sheet, idx)
   } else {
-    sprintf("values[%s]", ref_str)
+    sprintf("values[%s]", idx)
   }
 }
+
+
+
+
 offset_r <- function(addr, row_off, col_off) {
   m     <- regexec("^([A-Z]+)([0-9]+)$", addr)
   parts <- regmatches(addr, m)[[1]]
@@ -174,6 +253,13 @@ convert_criteria <- function(crit, noms_cellules = NULL) {
   # 6) Wildcards Excel (si besoin)…
   # if (str_detect(crit, "[*?]")) { … }
   
+  # 6bis) Si le critère est un appel de fonction (ex. MID(...)), on le compare à ==
+  if (grepl("^[A-Za-z]+\\(.*\\)$", crit)) {
+    return(list(type = "compare",
+                op   = "==",
+                value = convert_formula(crit, noms_cellules)))
+  }
+  
   # 7) Tout le reste, c’est du texte simple
   txt <- str_replace_all(crit, '^"|"$', '')
   return(list(type = "text", value = paste0('"', txt, '"')))
@@ -207,7 +293,46 @@ fun_map <- list(
   },
   INT = function(args, noms_cellules = NULL) paste0("floor(", args[1], ")"),
   DATE = function(args, noms_cellules = NULL) paste0("as.Date(ISOdate(", paste(args, collapse = ","), "))"),
-  OFFSET = function(args, noms_cellules = NULL) paste0("offset_r('", args[1], "',", args[2], ",", args[3], ")")
+  CONCATENATE = function(args, noms_cellules = NULL) {
+    # Equivalent Excel CONCATENATE -> R paste0
+    paste0("paste0(", paste(args, collapse = ","), ")")
+  }, 
+  OFFSET = function(args, noms_cellules = NULL, raw_args) {
+    # raw_args[[1]] = référence Excel "'IV - Flux effectifs'!M29"
+    ref_raw <- raw_args[[1]]
+    ref_r   <- convert_ref(ref_raw)  # e.g. "sheets[['IV - Flux effectifs']][29, 13]"
+    # on extrait feuille et indices
+    m     <- regexec("^(.*)\\[([0-9]+),\\s*([0-9]+)\\]$", ref_r)
+    parts <- regmatches(ref_r, m)[[1]]
+    sheet <- parts[2]
+    row0  <- as.integer(parts[3])
+    col0  <- as.integer(parts[4])
+    # args[2], args[3] sont déjà l’expression R du row-off et col-off
+    row_off <- args[2]
+    col_off <- args[3]
+    sprintf("%s[%d + (%s), %d + (%s)]",
+            sheet, row0, row_off, col0, col_off)
+  }, 
+  MID = function(args, noms_cellules = NULL) {
+    # Excel MID(text, start, n) → R substr(text, start, start + n - 1)
+    paste0(
+      "substr(",
+      args[1], ", ",
+      args[2], ", ",
+      args[2], " + ", args[3], " - 1)"
+    )
+  },
+  ISBLANK = function(args, noms_cellules = NULL) {
+    # Excel ISBLANK(x) → R : is.na(x) | x == ""
+    paste0("(", args[[1]], " %in% c(NA, \"\"))")
+  },
+  INDIRECT = function(args, noms_cellules = NULL) {
+    # Excel INDIRECT("A1") → R : évaluer dynamiquement l’expression
+    # ici on parse le texte et on évalue
+    paste0("eval(parse(text=", args[[1]], "))")
+  },
+  AND    = function(args, noms_cellules = NULL) paste0("(", paste(args, collapse = " & "), ")"), 
+  OR = function(args, noms_cellules = NULL) paste0("(", paste(args, collapse = " | "), ")")
 )
 
 vlookup_r <- function(x, table, col) {
@@ -230,16 +355,38 @@ convert_formula <- function(form, noms_cellules = list()) {
     return(NA_character_)
   }
   
-  # Cleanup global
-  f_original <- form
+  # --- nettoyage habituel de form → f
   f <- gsub("[\r\n]+", "", form)
-  f <- sub("^=", "", f)
-  f <- gsub("\\$", "", f)
-  f <- gsub("<>", "!=", f, fixed = TRUE)
+  f <- sub("^=",      "", f)
+  f <- gsub("\\$",    "", f)
+  f <- gsub("<>",    "!=", f, fixed = TRUE)
   f <- trimws(f)
-  f <- clean_parentheses(f)
+  #f <- clean_parentheses(f)
   
-  cat("After cleaning:", f, "\n")
+  # si f est entouré par une paire de (… ) parfaitement appariée,
+  # on enlève ces parenthèses le temps d’analyser l’intérieur,
+  # puis on les remet autour du code R généré
+  if (grepl("^\\(.*\\)$", f)) {
+    chars <- strsplit(f, "")[[1]]
+    depth <- cumsum(chars == "(") - cumsum(chars == ")")
+    if (depth[length(depth)] == 0L && all(depth[-length(depth)] > 0L)) {
+      inner <- substr(f, 2, nchar(f) - 1)
+      conv  <- convert_formula(inner, noms_cellules)
+      return(paste0("(", conv, ")"))
+    }
+  }
+  
+  if (grepl("^[-]?[0-9]+(\\.[0-9]+)?%$", f)) {
+    num <- sub("%$", "", f)
+    return(paste0("(", num, "/100)"))
+  }
+  
+  cat("After cleaning :", f, "\n")
+  
+  # détection de FEUILLE!CELL ou 'FEUILLE'!CELL, avec ou sans plage
+  if (grepl("^(?:'[^']+'|[A-Za-z0-9 _]+)![A-Za-z]+[0-9]+$", f, perl = TRUE)) {
+    return(convert_ref(f))
+  }
   
   # 2) Handle comparisons
   eq <- split_at_top(f, c("!=", "==", "<=", ">=", "<", ">", "="))
@@ -253,31 +400,45 @@ convert_formula <- function(form, noms_cellules = list()) {
     
     # Gestion spéciale pour comparaison avec chaîne vide
     if (right_r == '""') {
-      left_r <- paste0("!is.na(", left_r, ") & ", left_r, " != \"\"")
+      # On renvoie directement le test sans jamais recoller != ""
+      result <- paste0("!is.na(", left_r, ") & ", left_r, " != \"\"")
+      cat("Empty-string comparison result:", result, "\n")
+      return(result)
     }
     
+    # Sinon, on fait le test normal
     op_r <- switch(eq$op,
-                   "=" = "==", "==" = "==", "!=" = "!=",
-                   "<" = "<", ">" = ">", "<=" = "<=", ">=" = ">=")
+                   "="  = "==", "==" = "==", "!=" = "!=",
+                   "<"  = "<",  ">"  = ">",  "<=" = "<=",  ">=" = ">=")
     
     result <- paste0(left_r, " ", op_r, " ", right_r) 
+    
     cat("Comparison result:", result, "\n")
     return(result)
   }
   
-  # 3) Handle binary operations
-  bin <- split_at_top(f, c("+", "-", "*", "/", "&"))
+  # 3) Handle binary operations avec priorité (& > +- > */)
+  bin <- NULL
+  for (ops in list(c("&"), c("+", "-"), c("*", "/"))) {
+    bin <- split_at_top(f, ops)
+    if (!is.null(bin)) break
+  }
   if (!is.null(bin)) {
     cat("Found binary operator:", bin$op, "\n")
     cat("Left part:", bin$left, "\n")
     cat("Right part:", bin$right, "\n")
     
-    l <- convert_formula(bin$left, noms_cellules)
+    l <- convert_formula(bin$left,  noms_cellules)
     r <- convert_formula(bin$right, noms_cellules)
     
     if (bin$op == "&") {
+      # concaténation texte
       result <- paste0("paste0(", l, ",", r, ")")
+    } else if (bin$op == "-" && trimws(bin$left) == "") {
+      # unaire
+      result <- paste0("-", r)
     } else {
+      # binaire (+, -, *, /)
       result <- paste(l, bin$op, r)
     }
     
@@ -347,7 +508,7 @@ convert_formula <- function(form, noms_cellules = list()) {
   cat("Arguments string:", inside, "\n")
   
   raw_args <- split_top(inside)
-  raw_args <- vapply(raw_args, function(a) sub("^\\((.*)\\)$", "\\1", trimws(a)), "")
+  
   cat("Split arguments:", paste(raw_args, collapse = "|"), "\n")
   
   conv_args <- vapply(raw_args, function(x) {
@@ -356,13 +517,14 @@ convert_formula <- function(form, noms_cellules = list()) {
   }, character(1))
   
   # 6) Generate code
-  # 6) Generate code
   up <- toupper(fname)
   
   if (up == "SUMIF") {
     # on passe raw_args en 3e paramètre
     out <- fun_map[[up]](conv_args, noms_cellules, raw_args)
     
+  } else if (up == "OFFSET") {
+    out <- fun_map[[up]](conv_args, noms_cellules, raw_args)
   } else if (up == "VLOOKUP") {
     cat("Handling VLOOKUP specially\n")
     out <- sprintf("vlookup_r(%s, %s, %s)",

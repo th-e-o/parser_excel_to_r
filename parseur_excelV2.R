@@ -30,6 +30,17 @@ parse_excel_formulas <- function(path, emit_script = FALSE) {
   cells_all <- xlsx_cells(path)
   
   form_cells <- cells_all %>% filter(!is.na(formula))
+  # Fusionner les formules multilignes en une seule ligne
+  form_cells <- form_cells %>%
+    mutate(
+      # on remplace \r ou \n (et combinaisons) par un espace
+      formula = gsub("[\r\n]+", " ", formula),
+      # on écrase les espaces multiples
+      formula = gsub("\\s+", " ", formula),
+      # on enlève eventual leading/trailing spaces
+      formula = trimws(formula)
+  )
+  
   message(sprintf("[parse_excel_formulas] %d formules extraites.", nrow(form_cells)))
   message("[parse_excel_formulas] Vérification des variables globales utilisées dans les formules...")
   check_globals_usage(formules = form_cells$formula, noms_cellules = nom_cellules)
@@ -89,8 +100,8 @@ parse_excel_formulas <- function(path, emit_script = FALSE) {
       lines <- c(lines,
                  sprintf("# %s!%s -> %s", r$sheet, r$address, r$formula),
                  # on définit values avant chaque ligne
-                 sprintf("values <- sheets[['%s']]", r$sheet),
-                 sprintf("sheets[['%s']][%d, %d] <- %s", r$sheet, r$row, r$col, r$R_code),
+                 sprintf("values <- sheets[[\"%s\"]]", r$sheet),
+                 sprintf("sheets[[\"%s\"]][%d, %d] <- %s", r$sheet, r$row, r$col, r$R_code),
                  ""
       )
     }
